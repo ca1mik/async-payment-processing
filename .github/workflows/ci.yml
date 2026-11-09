@@ -1,0 +1,30 @@
+name: Payment processing CI
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start PostgreSQL, RabbitMQ, API and demo webhook
+        run: docker compose --profile demo up --build --wait postgres rabbitmq api webhook
+      - name: Check migration and queue payments while consumer is offline
+        run: |
+          docker compose exec -T api alembic check
+          docker compose exec -T api python -m unittest discover -v
+          docker compose exec -T api python -m tests.smoke seed
+      - name: Process payments and verify webhook retries and DLQ
+        run: |
+          docker compose up -d consumer
+          docker compose exec -T api python -m tests.smoke verify
+      - name: Show logs
+        if: failure()
+        run: docker compose --profile demo logs --no-color
+      - name: Clean up
+        if: always()
+        run: docker compose --profile demo down -v
